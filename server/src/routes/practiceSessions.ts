@@ -114,7 +114,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       select: {
         id: true, nativeLanguage: true, targetLanguage: true, persona: true,
-        status: true, topicTitle: true, transcriptPreview: true,
+        status: true, failureReason: true, topicTitle: true, transcriptPreview: true,
         startedAt: true, endedAt: true, durationSec: true,
         resultVersion: true, lastReadVersion: true, updatedAt: true,
       },
@@ -127,6 +127,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       targetLanguage:   s.targetLanguage,
       persona:          s.persona,
       status:           s.status,
+      failureReason:    s.failureReason,
       topicTitle:       s.topicTitle,
       transcriptPreview: s.transcriptPreview,
       startedAt:        s.startedAt,
@@ -201,6 +202,49 @@ router.post('/:id/read', async (req: AuthRequest, res: Response) => {
     res.json({ ok: true });
   } catch (e) {
     logger.error('POST /practice-sessions/:id/read error', { error: (e as Error).message });
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// DELETE /v1/practice-sessions/:id
+router.delete('/:id', async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+  try {
+    const session = await prisma.practiceSession.findUnique({ where: { id } });
+    if (!session || session.userId !== req.userId) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    await prisma.transcriptSegment.deleteMany({ where: { sessionId: id } });
+    await prisma.practiceSession.delete({ where: { id } });
+    res.json({ ok: true });
+  } catch (e) {
+    logger.error('DELETE /practice-sessions/:id error', { error: (e as Error).message });
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /v1/practice-sessions/:id/retry-analysis
+router.post('/:id/retry-analysis', async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+  try {
+    const session = await prisma.practiceSession.findUnique({ where: { id } });
+    if (!session || session.userId !== req.userId) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    if (session.status !== 'failed') {
+      res.status(409).json({ error: 'Session is not in failed state' });
+      return;
+    }
+    await prisma.practiceSession.update({
+      where: { id },
+      data:  { status: 'processing', failureReason: null },
+    });
+    enqueueAnalysisJob(id);
+    res.json({ sessionId: id, status: 'processing' });
+  } catch (e) {
+    logger.error('POST /practice-sessions/:id/retry-analysis error', { error: (e as Error).message });
     res.status(500).json({ error: 'Internal server error' });
   }
 });

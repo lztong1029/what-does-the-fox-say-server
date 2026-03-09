@@ -60,10 +60,15 @@ async function runJob(sessionId: string): Promise<void> {
 
     if (!transcriptText) {
       logger.info('No transcript for analysis — marking failed', { sessionId });
-      await prisma.practiceSession.update({
+      const failed = await prisma.practiceSession.update({
         where: { id: sessionId },
-        data:  { status: 'failed', failureReason: 'No transcript available' },
+        data:  {
+          status:        'failed',
+          failureReason: 'Session ended before feedback could be generated',
+          resultVersion: { increment: 1 },
+        },
       });
+      notifySessionUpdated(failed.userId, sessionId);
       return;
     }
 
@@ -90,10 +95,15 @@ async function runJob(sessionId: string): Promise<void> {
   } catch (e) {
     logger.error('Analysis job failed', { sessionId, error: (e as Error).message });
     try {
-      await prisma.practiceSession.update({
+      const failed = await prisma.practiceSession.update({
         where: { id: sessionId },
-        data:  { status: 'failed', failureReason: (e as Error).message },
+        data:  {
+          status:        'failed',
+          failureReason: (e as Error).message,
+          resultVersion: { increment: 1 },
+        },
       });
+      notifySessionUpdated(failed.userId, sessionId);
     } catch { /* ignore secondary failure */ }
   }
 }
@@ -111,13 +121,11 @@ async function generateAnalysis(
   targetLanguage: string,
 ): Promise<GeminiAnalysis> {
   if (!config.geminiApiKey) {
-    logger.warn('GEMINI_API_KEY not set — using stub analysis');
-    return stubAnalysis();
+    throw new Error('GEMINI_API_KEY not configured');
   }
 
-  try {
-    const genAI  = new GoogleGenAI({ apiKey: config.geminiApiKey });
-    const prompt = `You are a language learning coach. The learner's native language is "${nativeLanguage}" and they are practicing "${targetLanguage}".
+  const genAI  = new GoogleGenAI({ apiKey: config.geminiApiKey });
+  const prompt = `You are a language learning coach. The learner's native language is "${nativeLanguage}" and they are practicing "${targetLanguage}".
 
 Write summary and feedback_overall in ${nativeLanguage}. The transcript will be in ${targetLanguage} — that is expected and correct.
 
@@ -131,24 +139,13 @@ Analyze the conversation transcript below and respond with a single JSON object 
 Transcript:
 ${transcript}`;
 
-    const response = await genAI.models.generateContent({
-      model:    config.feedbackModel,
-      contents: prompt,
-    });
+  const response = await genAI.models.generateContent({
+    model:    config.feedbackModel,
+    contents: prompt,
+  });
 
-    const raw     = response.text ?? '';
-    const cleaned = raw.replace(/```(?:json)?\n?/g, '').trim();
-    return JSON.parse(cleaned) as GeminiAnalysis;
-  } catch (e) {
-    logger.error('Gemini analysis failed — using stub', { error: (e as Error).message });
-    return stubAnalysis();
-  }
+  const raw     = response.text ?? '';
+  const cleaned = raw.replace(/```(?:json)?\n?/g, '').trim();
+  return JSON.parse(cleaned) as GeminiAnalysis;
 }
 
-function stubAnalysis(): GeminiAnalysis {
-  return {
-    topic_title:      'Conversation Practice',
-    summary:          'The learner engaged in a language practice session.',
-    feedback_overall: 'Good effort! Keep practising regularly to build fluency.',
-  };
-}
