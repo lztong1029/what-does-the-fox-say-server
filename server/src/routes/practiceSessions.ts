@@ -124,6 +124,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
         status: true, processingStage: true, failureReason: true, topicTitle: true, transcriptPreview: true,
         startedAt: true, endedAt: true, durationSec: true,
         resultVersion: true, lastReadVersion: true, updatedAt: true,
+        feedbackJson: true,
       } as any,
     });
 
@@ -142,7 +143,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       endedAt:          s.endedAt,
       durationSec:      s.durationSec,
       updatedAt:        s.updatedAt,
+      resultVersion:    s.resultVersion,
+      lastReadVersion:  s.lastReadVersion,
       isUnread:         s.lastReadVersion < s.resultVersion,
+      feedbackJson:     s.feedbackJson ?? null,
     }));
 
     res.json({ items, nextCursor: hasMore ? sessions[limit - 1].id : null });
