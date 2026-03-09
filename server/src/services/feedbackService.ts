@@ -4,16 +4,16 @@ import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { notifySessionUpdated } from '../ws/historyGateway.js';
 
+export interface TranscriptEntry {
+  speaker: 'user' | 'fox';
+  text:    string;
+}
+
 export interface AnalysisResult {
-  topic_title:         string;
-  summary:             string;
-  feedback_overall:    string;
-  pronunciation_notes: string[];
-  grammar_notes:       string[];
-  vocabulary_notes:    string[];
-  fluency_notes:       string[];
-  next_reply_prompt:   string;
-  transcript_preview:  string;
+  topic_title:      string;
+  summary:          string;
+  feedback_overall: string;
+  transcript:       TranscriptEntry[];
 }
 
 // Simple in-process FIFO queue with concurrency limit
@@ -67,15 +67,21 @@ async function runJob(sessionId: string): Promise<void> {
       return;
     }
 
-    const result  = await generateAnalysis(transcriptText, session.nativeLanguage, session.targetLanguage);
+    // Build structured transcript from segments
+    const transcriptEntries: TranscriptEntry[] = session.transcriptSegments.length > 0
+      ? session.transcriptSegments.map(s => ({ speaker: s.speaker as 'user' | 'fox', text: s.text }))
+      : (session.transcriptFullJson as TranscriptEntry[] | null) ?? [];
+
+    const analysis = await generateAnalysis(transcriptText, session.nativeLanguage, session.targetLanguage);
+    const result: AnalysisResult = { ...analysis, transcript: transcriptEntries };
+
     const updated = await prisma.practiceSession.update({
       where: { id: sessionId },
       data: {
-        status:            'ready',
-        topicTitle:        result.topic_title,
-        transcriptPreview: result.transcript_preview,
-        feedbackJson:      result as never,
-        resultVersion:     { increment: 1 },
+        status:        'ready',
+        topicTitle:    result.topic_title,
+        feedbackJson:  result as never,
+        resultVersion: { increment: 1 },
       },
     });
 
@@ -92,11 +98,18 @@ async function runJob(sessionId: string): Promise<void> {
   }
 }
 
+// Gemini only generates the three text fields; transcript is assembled from segments.
+interface GeminiAnalysis {
+  topic_title:      string;
+  summary:          string;
+  feedback_overall: string;
+}
+
 async function generateAnalysis(
   transcript: string,
   nativeLanguage: string,
   targetLanguage: string,
-): Promise<AnalysisResult> {
+): Promise<GeminiAnalysis> {
   if (!config.geminiApiKey) {
     logger.warn('GEMINI_API_KEY not set — using stub analysis');
     return stubAnalysis();
@@ -106,19 +119,13 @@ async function generateAnalysis(
     const genAI  = new GoogleGenAI({ apiKey: config.geminiApiKey });
     const prompt = `You are a language learning coach. The learner's native language is "${nativeLanguage}" and they are practicing "${targetLanguage}".
 
-Write ALL feedback text fields (summary, feedback_overall, all notes, next_reply_prompt) in ${nativeLanguage}. The transcript will be in ${targetLanguage} — that is expected and correct.
+Write summary and feedback_overall in ${nativeLanguage}. The transcript will be in ${targetLanguage} — that is expected and correct.
 
 Analyze the conversation transcript below and respond with a single JSON object only (no markdown fences, no extra text):
 {
-  "topic_title":         "short title of what was discussed (max 8 words)",
-  "summary":             "2–3 sentence summary of the conversation",
-  "feedback_overall":    "2–3 sentences of overall performance feedback",
-  "pronunciation_notes": ["note1", "note2"],
-  "grammar_notes":       ["note1", "note2"],
-  "vocabulary_notes":    ["note1", "note2"],
-  "fluency_notes":       ["note1", "note2"],
-  "next_reply_prompt":   "a suggested topic or question for the next practice session",
-  "transcript_preview":  "first ~100 characters of the conversation"
+  "topic_title":      "short title of what was discussed (max 8 words)",
+  "summary":          "2–3 sentence summary of the conversation",
+  "feedback_overall": "2–3 sentences of overall performance feedback"
 }
 
 Transcript:
@@ -131,23 +138,17 @@ ${transcript}`;
 
     const raw     = response.text ?? '';
     const cleaned = raw.replace(/```(?:json)?\n?/g, '').trim();
-    return JSON.parse(cleaned) as AnalysisResult;
+    return JSON.parse(cleaned) as GeminiAnalysis;
   } catch (e) {
     logger.error('Gemini analysis failed — using stub', { error: (e as Error).message });
     return stubAnalysis();
   }
 }
 
-function stubAnalysis(): AnalysisResult {
+function stubAnalysis(): GeminiAnalysis {
   return {
-    topic_title:         'Conversation Practice',
-    summary:             'The learner engaged in a language practice session.',
-    feedback_overall:    'Good effort! Keep practising regularly to build fluency.',
-    pronunciation_notes: ['Focus on clear enunciation of consonants'],
-    grammar_notes:       ['Watch verb tense consistency'],
-    vocabulary_notes:    ['Try to vary your vocabulary more'],
-    fluency_notes:       ['Aim for a more natural pace'],
-    next_reply_prompt:   'Tell me about your favourite hobby.',
-    transcript_preview:  'Practice session completed.',
+    topic_title:      'Conversation Practice',
+    summary:          'The learner engaged in a language practice session.',
+    feedback_overall: 'Good effort! Keep practising regularly to build fluency.',
   };
 }
