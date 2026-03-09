@@ -169,27 +169,32 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
       return;
     }
     const s = session as any;
+    const rawFeedback = session.feedbackJson as any;
+    const feedbackJson = rawFeedback ? {
+      ...rawFeedback,
+      transcript: Array.isArray(rawFeedback.transcript) ? rawFeedback.transcript : [],
+    } : undefined;
     res.json({
-      sessionId:          session.id,
-      nativeLanguage:     session.nativeLanguage,
-      targetLanguage:     session.targetLanguage,
-      persona:            session.persona,
-      status:             session.status,
-      processingStage:    s.processingStage ?? null,
-      failureReason:      session.failureReason,
-      topicTitle:         session.topicTitle,
-      transcriptPreview:  session.transcriptPreview,
-      transcriptFullJson: session.transcriptFullJson,
-      transcriptSegments: session.transcriptSegments.length > 0 ? session.transcriptSegments : undefined,
-      feedbackJson:       session.feedbackJson,
-      startedAt:          session.startedAt,
-      endedAt:            session.endedAt,
-      durationSec:        session.durationSec,
-      audioUrl:           session.audioUrl,
-      modelAudioUrl:      session.modelAudioUrl,
-      resultVersion:      session.resultVersion,
-      lastReadVersion:    session.lastReadVersion,
-      updatedAt:          session.updatedAt,
+      sessionId:       session.id,
+      nativeLanguage:  session.nativeLanguage,
+      targetLanguage:  session.targetLanguage,
+      status:          session.status,
+      startedAt:       session.startedAt,
+      updatedAt:       session.updatedAt,
+      resultVersion:   session.resultVersion,
+      lastReadVersion: session.lastReadVersion,
+      ...(session.persona           != null && { persona:            session.persona }),
+      ...(s.processingStage         != null && { processingStage:    s.processingStage }),
+      ...(session.failureReason     != null && { failureReason:      session.failureReason }),
+      ...(session.topicTitle        != null && { topicTitle:         session.topicTitle }),
+      ...(session.transcriptPreview != null && { transcriptPreview:  session.transcriptPreview }),
+      ...(session.transcriptFullJson != null && { transcriptFullJson: session.transcriptFullJson }),
+      ...(session.transcriptSegments.length > 0 && { transcriptSegments: session.transcriptSegments }),
+      ...(feedbackJson              != null && { feedbackJson }),
+      ...(session.endedAt           != null && { endedAt:            session.endedAt }),
+      ...(session.durationSec       != null && { durationSec:        session.durationSec }),
+      ...(session.audioUrl          != null && { audioUrl:           session.audioUrl }),
+      ...(session.modelAudioUrl     != null && { modelAudioUrl:      session.modelAudioUrl }),
     });
   } catch (e) {
     logger.error('GET /practice-sessions/:id error', { error: (e as Error).message });
