@@ -1,0 +1,79 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String            @id @default(uuid())
+  createdAt DateTime          @default(now())
+  sessions  PracticeSession[]
+  profile   UserProfile?
+  devices   Device[]
+}
+
+model Device {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  deviceId    String   @unique
+  deviceModel String?
+  os          String?
+  language    String?
+  timezone    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model UserProfile {
+  userId         String   @id
+  user           User     @relation(fields: [userId], references: [id])
+  nativeLanguage String?
+  targetLanguage String?
+  persona        String?
+  updatedAt      DateTime @updatedAt
+}
+
+model PracticeSession {
+  id                 String              @id @default(uuid())
+  userId             String
+  user               User                @relation(fields: [userId], references: [id])
+  deviceId           String?
+  nativeLanguage     String
+  targetLanguage     String
+  persona            String?
+  status             String              // active | processing | ready | failed
+  failureReason      String?
+  topicTitle         String?
+  transcriptPreview  String?
+  transcriptFullJson Json?
+  feedbackJson       Json?
+  startedAt          DateTime            @default(now())
+  endedAt            DateTime?
+  updatedAt          DateTime            @updatedAt
+  durationSec        Int?
+  audioUrl           String?
+  modelAudioUrl      String?
+  resultVersion      Int                 @default(0)
+  lastReadVersion    Int                 @default(0)
+  transcriptSegments TranscriptSegment[]
+
+  @@index([userId, startedAt])
+}
+
+model TranscriptSegment {
+  id        String          @id @default(uuid())
+  sessionId String
+  session   PracticeSession @relation(fields: [sessionId], references: [id])
+  seq       Int
+  speaker   String
+  text      String
+  isFinal   Boolean         @default(true)
+  createdAt DateTime        @default(now())
+
+  @@unique([sessionId, seq])
+  @@index([sessionId])
+}

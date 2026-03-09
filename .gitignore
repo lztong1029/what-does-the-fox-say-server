@@ -1,0 +1,10 @@
+.DS_Store
+**/.DS_Store
+
+# Node/TS build artifacts
+server/node_modules/
+server/dist/
+server/.env
+server/.env.*
+!server/.env.example
+*.log
