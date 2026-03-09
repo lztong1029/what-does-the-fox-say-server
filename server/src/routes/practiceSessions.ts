@@ -298,8 +298,16 @@ router.get('/:id/audio', async (req: AuthRequest, res: Response) => {
   }
 });
 
-// POST /v1/practice-sessions/:id/retry-analysis
+// POST /v1/practice-sessions/:id/retry (alias: /retry-analysis)
+router.post('/:id/retry', async (req: AuthRequest, res: Response) => {
+  return retryAnalysis(req, res);
+});
+
 router.post('/:id/retry-analysis', async (req: AuthRequest, res: Response) => {
+  return retryAnalysis(req, res);
+});
+
+async function retryAnalysis(req: AuthRequest, res: Response): Promise<void> {
   const { id } = req.params;
   try {
     const session = await prisma.practiceSession.findUnique({ where: { id } });
@@ -327,6 +335,6 @@ router.post('/:id/retry-analysis', async (req: AuthRequest, res: Response) => {
     logger.error('POST /practice-sessions/:id/retry-analysis error', { error: (e as Error).message });
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}
 
 export default router;
