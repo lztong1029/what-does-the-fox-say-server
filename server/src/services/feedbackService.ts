@@ -18,6 +18,10 @@ export interface AnalysisResult {
   transcript:       TranscriptEntry[];
 }
 
+function normalizeTranscriptSpeaker(speaker: string): 'user' | 'fox' {
+  return speaker === 'user' ? 'user' : 'fox';
+}
+
 // Simple in-process FIFO queue with concurrency limit
 const queue: string[] = [];
 let running = 0;
@@ -59,11 +63,15 @@ async function runJob(sessionId: string): Promise<void> {
     let transcriptText = '';
     if (session.transcriptSegments.length > 0) {
       transcriptText = session.transcriptSegments
-        .map(s => `${s.speaker}: ${s.text}`)
+        .map(s => `${normalizeTranscriptSpeaker(s.speaker)}: ${s.text}`)
         .join('\n');
     } else if (session.transcriptFullJson) {
       const segs = session.transcriptFullJson as Array<{ speaker: string; text: string }>;
-      transcriptText = segs.map(s => `${s.speaker}: ${s.text}`).join('\n');
+      transcriptText = segs
+        .map(s => ({ speaker: normalizeTranscriptSpeaker(s.speaker), text: s.text?.trim?.() ?? '' }))
+        .filter(s => s.text.length > 0)
+        .map(s => `${s.speaker}: ${s.text}`)
+        .join('\n');
     }
 
     // STT fallback: if no transcript but audio file exists on disk, use Gemini audio analysis
@@ -92,8 +100,10 @@ async function runJob(sessionId: string): Promise<void> {
 
     // Build structured transcript from segments (or empty if STT path)
     const transcriptEntries: TranscriptEntry[] = session.transcriptSegments.length > 0
-      ? session.transcriptSegments.map(s => ({ speaker: s.speaker as 'user' | 'fox', text: s.text }))
-      : (session.transcriptFullJson as TranscriptEntry[] | null) ?? [];
+      ? session.transcriptSegments.map(s => ({ speaker: normalizeTranscriptSpeaker(s.speaker), text: s.text }))
+      : (((session.transcriptFullJson as Array<{ speaker: string; text: string }> | null) ?? [])
+        .map(s => ({ speaker: normalizeTranscriptSpeaker(s.speaker), text: s.text?.trim?.() ?? '' }))
+        .filter(s => s.text.length > 0));
 
     const result: AnalysisResult = analysisResult
       ?? { ...await generateAnalysis(transcriptText, session.nativeLanguage, session.targetLanguage), transcript: transcriptEntries };
@@ -111,6 +121,12 @@ async function runJob(sessionId: string): Promise<void> {
     }) as Awaited<ReturnType<typeof prisma.practiceSession.update>>;
 
     logger.info('Analysis job completed', { sessionId, resultVersion: updated.resultVersion });
+    logger.debug('Analysis payload summary', {
+      sessionId,
+      transcriptCount: result.transcript.length,
+      summaryChars: result.summary.length,
+      feedbackChars: result.feedback_overall.length,
+    });
     notifySessionUpdated(session.userId, sessionId, updated.status, 'ready', updated.resultVersion);
   } catch (e) {
     logger.error('Analysis job failed', { sessionId, error: (e as Error).message });
@@ -218,4 +234,3 @@ ${transcript}`;
   const cleaned = raw.replace(/```(?:json)?\n?/g, '').trim();
   return JSON.parse(cleaned) as GeminiAnalysis;
 }
-

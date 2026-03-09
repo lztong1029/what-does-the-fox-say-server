@@ -149,6 +149,13 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       ...(s.feedbackJson     != null && { summary: (s.feedbackJson as any).summary }),
     }));
 
+    logger.debug('GET /practice-sessions success', {
+      userId: req.userId,
+      count: items.length,
+      withSummaryCount: items.filter((item: any) => typeof item.summary === 'string' && item.summary.length > 0).length,
+      readyCount: items.filter((item: any) => item.status === 'ready').length,
+    });
+
     res.json({ items, nextCursor: hasMore ? sessions[limit - 1].id : null });
   } catch (e) {
     logger.error('GET /practice-sessions error', { error: (e as Error).message });
@@ -174,6 +181,18 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
       ...rawFeedback,
       transcript: Array.isArray(rawFeedback.transcript) ? rawFeedback.transcript : [],
     } : undefined;
+    logger.debug('GET /practice-sessions/:id success', {
+      sessionId: id,
+      status: session.status,
+      processingStage: s.processingStage ?? null,
+      hasFeedbackJson: feedbackJson != null,
+      hasFeedbackOverall: typeof rawFeedback?.feedback_overall === 'string' && rawFeedback.feedback_overall.length > 0,
+      transcriptCount: Array.isArray(feedbackJson?.transcript)
+        ? feedbackJson.transcript.length
+        : Array.isArray(session.transcriptFullJson)
+          ? (session.transcriptFullJson as unknown[]).length
+          : session.transcriptSegments.length,
+    });
     res.json({
       sessionId:       session.id,
       nativeLanguage:  session.nativeLanguage,
