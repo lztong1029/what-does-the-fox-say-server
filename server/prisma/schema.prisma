@@ -46,6 +46,7 @@ model PracticeSession {
   targetLanguage     String
   persona            String?
   status             String              // active | processing | ready | failed
+  processingStage    String?             // finalize_received | analysis_running | ready | failed
   failureReason      String?
   topicTitle         String?
   transcriptPreview  String?

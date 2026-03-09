@@ -37,6 +37,12 @@ function drainQueue(): void {
 async function runJob(sessionId: string): Promise<void> {
   logger.info('Analysis job started', { sessionId });
   try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (prisma.practiceSession as any).updateMany({
+      where: { id: sessionId, status: 'processing' },
+      data:  { processingStage: 'analysis_running' },
+    });
+
     const session = await prisma.practiceSession.findUnique({
       where:   { id: sessionId },
       include: { transcriptSegments: { orderBy: { seq: 'asc' } } },
@@ -60,15 +66,17 @@ async function runJob(sessionId: string): Promise<void> {
 
     if (!transcriptText) {
       logger.info('No transcript for analysis — marking failed', { sessionId });
-      const failed = await prisma.practiceSession.update({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const failed = await (prisma.practiceSession as any).update({
         where: { id: sessionId },
         data:  {
-          status:        'failed',
-          failureReason: 'Session ended before feedback could be generated',
-          resultVersion: { increment: 1 },
+          status:          'failed',
+          processingStage: 'failed',
+          failureReason:   'Session ended before feedback could be generated',
+          resultVersion:   { increment: 1 },
         },
-      });
-      notifySessionUpdated(failed.userId, sessionId);
+      }) as Awaited<ReturnType<typeof prisma.practiceSession.update>>;
+      notifySessionUpdated(failed.userId, sessionId, failed.status, 'failed', failed.resultVersion);
       return;
     }
 
@@ -80,30 +88,34 @@ async function runJob(sessionId: string): Promise<void> {
     const analysis = await generateAnalysis(transcriptText, session.nativeLanguage, session.targetLanguage);
     const result: AnalysisResult = { ...analysis, transcript: transcriptEntries };
 
-    const updated = await prisma.practiceSession.update({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const updated = await (prisma.practiceSession as any).update({
       where: { id: sessionId },
       data: {
-        status:        'ready',
-        topicTitle:    result.topic_title,
-        feedbackJson:  result as never,
-        resultVersion: { increment: 1 },
+        status:          'ready',
+        processingStage: 'ready',
+        topicTitle:      result.topic_title,
+        feedbackJson:    result,
+        resultVersion:   { increment: 1 },
       },
-    });
+    }) as Awaited<ReturnType<typeof prisma.practiceSession.update>>;
 
     logger.info('Analysis job completed', { sessionId, resultVersion: updated.resultVersion });
-    notifySessionUpdated(session.userId, sessionId);
+    notifySessionUpdated(session.userId, sessionId, updated.status, 'ready', updated.resultVersion);
   } catch (e) {
     logger.error('Analysis job failed', { sessionId, error: (e as Error).message });
     try {
-      const failed = await prisma.practiceSession.update({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const failed = await (prisma.practiceSession as any).update({
         where: { id: sessionId },
         data:  {
-          status:        'failed',
-          failureReason: (e as Error).message,
-          resultVersion: { increment: 1 },
+          status:          'failed',
+          processingStage: 'failed',
+          failureReason:   (e as Error).message,
+          resultVersion:   { increment: 1 },
         },
-      });
-      notifySessionUpdated(failed.userId, sessionId);
+      }) as Awaited<ReturnType<typeof prisma.practiceSession.update>>;
+      notifySessionUpdated(failed.userId, sessionId, failed.status, 'failed', failed.resultVersion);
     } catch { /* ignore secondary failure */ }
   }
 }

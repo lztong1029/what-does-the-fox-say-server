@@ -11,10 +11,16 @@ const subscribers = new Map<string, Set<WebSocket>>();
  * Pushes { type: "session_updated", sessionId } to all history WS connections
  * for that user.
  */
-export function notifySessionUpdated(userId: string, sessionId: string): void {
+export function notifySessionUpdated(
+  userId: string,
+  sessionId: string,
+  status: string,
+  processingStage: string | null,
+  resultVersion: number,
+): void {
   const conns = subscribers.get(userId);
   if (!conns || conns.size === 0) return;
-  const payload = JSON.stringify({ type: 'session_updated', sessionId });
+  const payload = JSON.stringify({ type: 'session_updated', sessionId, status, processingStage, resultVersion });
   for (const ws of conns) {
     if (ws.readyState === WebSocket.OPEN) ws.send(payload);
   }

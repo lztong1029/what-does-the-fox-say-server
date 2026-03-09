@@ -82,19 +82,21 @@ router.patch('/:id/finalize', async (req: AuthRequest, res: Response) => {
       if (segments.length > 0) finalTranscript = segments;
     }
 
-    await prisma.practiceSession.update({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (prisma.practiceSession as any).update({
       where: { id },
       data: {
-        status:            'processing',
+        status:             'processing',
+        processingStage:    'finalize_received',
         endedAt,
-        durationSec:       computedDuration,
-        transcriptFullJson: finalTranscript as never ?? undefined,
-        audioUrl:          typeof audioUrl === 'string' ? audioUrl : undefined,
+        durationSec:        computedDuration,
+        transcriptFullJson: finalTranscript ?? undefined,
+        audioUrl:           typeof audioUrl === 'string' ? audioUrl : undefined,
       },
     });
 
     enqueueAnalysisJob(id);
-    res.json({ sessionId: id, status: 'processing' });
+    res.json({ sessionId: id, status: 'processing', processingStage: 'finalize_received' });
   } catch (e) {
     logger.error('PATCH /practice-sessions/:id/finalize error', { error: (e as Error).message });
     res.status(500).json({ error: 'Internal server error' });
@@ -112,21 +114,23 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       orderBy: { startedAt: 'desc' },
       take:    limit + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       select: {
         id: true, nativeLanguage: true, targetLanguage: true, persona: true,
-        status: true, failureReason: true, topicTitle: true, transcriptPreview: true,
+        status: true, processingStage: true, failureReason: true, topicTitle: true, transcriptPreview: true,
         startedAt: true, endedAt: true, durationSec: true,
         resultVersion: true, lastReadVersion: true, updatedAt: true,
-      },
+      } as any,
     });
 
     const hasMore = sessions.length > limit;
-    const items   = sessions.slice(0, limit).map(s => ({
+    const items   = sessions.slice(0, limit).map((s: any) => ({
       sessionId:        s.id,
       nativeLanguage:   s.nativeLanguage,
       targetLanguage:   s.targetLanguage,
       persona:          s.persona,
       status:           s.status,
+      processingStage:  s.processingStage ?? null,
       failureReason:    s.failureReason,
       topicTitle:       s.topicTitle,
       transcriptPreview: s.transcriptPreview,
@@ -148,30 +152,36 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 router.get('/:id', async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
   try {
-    const session = await prisma.practiceSession.findUnique({ where: { id } });
+    const session = await prisma.practiceSession.findUnique({
+      where:   { id },
+      include: { transcriptSegments: { orderBy: { seq: 'asc' }, select: { seq: true, speaker: true, text: true } } },
+    });
     if (!session || session.userId !== req.userId) {
       res.status(404).json({ error: 'Session not found' });
       return;
     }
+    const s = session as any;
     res.json({
-      sessionId:         session.id,
-      nativeLanguage:    session.nativeLanguage,
-      targetLanguage:    session.targetLanguage,
-      persona:           session.persona,
-      status:            session.status,
-      failureReason:     session.failureReason,
-      topicTitle:        session.topicTitle,
-      transcriptPreview: session.transcriptPreview,
+      sessionId:          session.id,
+      nativeLanguage:     session.nativeLanguage,
+      targetLanguage:     session.targetLanguage,
+      persona:            session.persona,
+      status:             session.status,
+      processingStage:    s.processingStage ?? null,
+      failureReason:      session.failureReason,
+      topicTitle:         session.topicTitle,
+      transcriptPreview:  session.transcriptPreview,
       transcriptFullJson: session.transcriptFullJson,
-      feedbackJson:      session.feedbackJson,
-      startedAt:         session.startedAt,
-      endedAt:           session.endedAt,
-      durationSec:       session.durationSec,
-      audioUrl:          session.audioUrl,
-      modelAudioUrl:     session.modelAudioUrl,
-      resultVersion:     session.resultVersion,
-      lastReadVersion:   session.lastReadVersion,
-      updatedAt:         session.updatedAt,
+      transcriptSegments: session.transcriptSegments.length > 0 ? session.transcriptSegments : undefined,
+      feedbackJson:       session.feedbackJson,
+      startedAt:          session.startedAt,
+      endedAt:            session.endedAt,
+      durationSec:        session.durationSec,
+      audioUrl:           session.audioUrl,
+      modelAudioUrl:      session.modelAudioUrl,
+      resultVersion:      session.resultVersion,
+      lastReadVersion:    session.lastReadVersion,
+      updatedAt:          session.updatedAt,
     });
   } catch (e) {
     logger.error('GET /practice-sessions/:id error', { error: (e as Error).message });
@@ -235,6 +245,11 @@ router.post('/:id/retry-analysis', async (req: AuthRequest, res: Response) => {
     }
     if (session.status !== 'failed') {
       res.status(409).json({ error: 'Session is not in failed state' });
+      return;
+    }
+    const segCount = await prisma.transcriptSegment.count({ where: { sessionId: id } });
+    if (!session.transcriptFullJson && segCount === 0) {
+      res.status(422).json({ error: 'No transcript available — cannot retry analysis' });
       return;
     }
     await prisma.practiceSession.update({

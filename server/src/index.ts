@@ -31,6 +31,7 @@ const app = express();
 // ── Middleware ───────────────────────────────────────────────────────────────
 app.use(express.json());
 app.disable('x-powered-by');
+app.disable('etag'); // prevent 304s — iOS URLSession doesn't handle them reliably
 
 // ── Routes ───────────────────────────────────────────────────────────────────
 app.use('/health',                healthRouter);
