@@ -160,7 +160,7 @@ export class GeminiLiveSession {
     if (!this.session || this.closed) return;
     try {
       this.session.sendRealtimeInput({
-        media: {
+        audio: {
           data: pcmBase64,
           mimeType: `audio/pcm;rate=${sampleRate}`,
         },
