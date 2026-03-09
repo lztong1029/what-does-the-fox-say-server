@@ -10,4 +10,8 @@ export const config = {
   maxAudioMsgPerSecond: 20,
   maxWsConnPerUserPerMin: 5,
   feedbackConcurrency: 2,
+  // Audio storage — Railway Volume should be mounted at /data
+  audioStoragePath: process.env.AUDIO_STORAGE_PATH ?? '/data/audio',
+  // Public base URL used to build audioUrl returned to clients
+  publicUrl: (process.env.PUBLIC_URL ?? '').replace(/\/$/, ''),
 } as const;

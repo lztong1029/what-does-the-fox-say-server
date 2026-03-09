@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { GoogleGenAI } from '@google/genai';
 import { prisma } from '../db/prisma.js';
 import { config } from '../config.js';
@@ -64,29 +66,37 @@ async function runJob(sessionId: string): Promise<void> {
       transcriptText = segs.map(s => `${s.speaker}: ${s.text}`).join('\n');
     }
 
+    // STT fallback: if no transcript but audio file exists on disk, use Gemini audio analysis
+    let analysisResult: AnalysisResult | null = null;
     if (!transcriptText) {
-      logger.info('No transcript for analysis — marking failed', { sessionId });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const failed = await (prisma.practiceSession as any).update({
-        where: { id: sessionId },
-        data:  {
-          status:          'failed',
-          processingStage: 'failed',
-          failureReason:   'Session ended before feedback could be generated',
-          resultVersion:   { increment: 1 },
-        },
-      }) as Awaited<ReturnType<typeof prisma.practiceSession.update>>;
-      notifySessionUpdated(failed.userId, sessionId, failed.status, 'failed', failed.resultVersion);
-      return;
+      const audioFilePath = path.join(config.audioStoragePath, `${sessionId}.m4a`);
+      if (fs.existsSync(audioFilePath)) {
+        logger.info('No transcript — attempting audio STT fallback', { sessionId });
+        analysisResult = await generateAnalysisFromAudio(audioFilePath, session.nativeLanguage, session.targetLanguage);
+      } else {
+        logger.info('No transcript for analysis — marking failed', { sessionId });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const failed = await (prisma.practiceSession as any).update({
+          where: { id: sessionId },
+          data:  {
+            status:          'failed',
+            processingStage: 'failed',
+            failureReason:   'Session ended before feedback could be generated',
+            resultVersion:   { increment: 1 },
+          },
+        }) as Awaited<ReturnType<typeof prisma.practiceSession.update>>;
+        notifySessionUpdated(failed.userId, sessionId, failed.status, 'failed', failed.resultVersion);
+        return;
+      }
     }
 
-    // Build structured transcript from segments
+    // Build structured transcript from segments (or empty if STT path)
     const transcriptEntries: TranscriptEntry[] = session.transcriptSegments.length > 0
       ? session.transcriptSegments.map(s => ({ speaker: s.speaker as 'user' | 'fox', text: s.text }))
       : (session.transcriptFullJson as TranscriptEntry[] | null) ?? [];
 
-    const analysis = await generateAnalysis(transcriptText, session.nativeLanguage, session.targetLanguage);
-    const result: AnalysisResult = { ...analysis, transcript: transcriptEntries };
+    const result: AnalysisResult = analysisResult
+      ?? { ...await generateAnalysis(transcriptText, session.nativeLanguage, session.targetLanguage), transcript: transcriptEntries };
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const updated = await (prisma.practiceSession as any).update({
@@ -118,6 +128,54 @@ async function runJob(sessionId: string): Promise<void> {
       notifySessionUpdated(failed.userId, sessionId, failed.status, 'failed', failed.resultVersion);
     } catch { /* ignore secondary failure */ }
   }
+}
+
+async function generateAnalysisFromAudio(
+  audioFilePath: string,
+  nativeLanguage: string,
+  targetLanguage: string,
+): Promise<AnalysisResult> {
+  if (!config.geminiApiKey) throw new Error('GEMINI_API_KEY not configured');
+
+  const audioData = fs.readFileSync(audioFilePath).toString('base64');
+  const genAI  = new GoogleGenAI({ apiKey: config.geminiApiKey });
+  const prompt = `You are a language learning coach. The learner's native language is "${nativeLanguage}" and they are practicing "${targetLanguage}".
+
+The audio contains a conversation between a learner (user) and an AI language tutor (fox).
+First transcribe the conversation, then analyze it.
+
+Write summary and feedback_overall in ${nativeLanguage}.
+
+Respond with a single JSON object only (no markdown fences, no extra text):
+{
+  "topic_title":      "short title of what was discussed (max 8 words)",
+  "summary":          "2–3 sentence summary of the conversation",
+  "feedback_overall": "2–3 sentences of overall performance feedback",
+  "transcript": [
+    { "speaker": "user", "text": "..." },
+    { "speaker": "fox",  "text": "..." }
+  ]
+}`;
+
+  const response = await genAI.models.generateContent({
+    model:    config.feedbackModel,
+    contents: {
+      parts: [
+        { text: prompt },
+        { inlineData: { mimeType: 'audio/mp4', data: audioData } },
+      ],
+    } as never,
+  });
+
+  const raw     = response.text ?? '';
+  const cleaned = raw.replace(/```(?:json)?\n?/g, '').trim();
+  const parsed  = JSON.parse(cleaned) as GeminiAnalysis & { transcript?: TranscriptEntry[] };
+  return {
+    topic_title:      parsed.topic_title,
+    summary:          parsed.summary,
+    feedback_overall: parsed.feedback_overall,
+    transcript:       parsed.transcript ?? [],
+  };
 }
 
 // Gemini only generates the three text fields; transcript is assembled from segments.

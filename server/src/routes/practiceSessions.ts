@@ -1,8 +1,12 @@
+import fs from 'fs';
+import path from 'path';
 import { Router, type Response } from 'express';
+import multer from 'multer';
 import { requireAuth, type AuthRequest } from '../auth/middleware.js';
 import { prisma } from '../db/prisma.js';
 import { enqueueAnalysisJob } from '../services/feedbackService.js';
 import { logger } from '../utils/logger.js';
+import { config } from '../config.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -234,6 +238,66 @@ router.delete('/:id', async (req: AuthRequest, res: Response) => {
   }
 });
 
+// POST /v1/practice-sessions/:id/audio
+// Accepts a multipart audio file, saves it to disk, returns { audioUrl }
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      fs.mkdirSync(config.audioStoragePath, { recursive: true });
+      cb(null, config.audioStoragePath);
+    },
+    filename: (req, _file, cb) => {
+      cb(null, `${(req as AuthRequest).params.id}.m4a`);
+    },
+  }),
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB
+});
+
+router.post('/:id/audio', upload.single('file'), async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+  try {
+    if (!req.file) {
+      res.status(400).json({ error: 'No file uploaded' });
+      return;
+    }
+    const session = await prisma.practiceSession.findUnique({ where: { id } });
+    if (!session || session.userId !== req.userId) {
+      fs.unlinkSync(req.file.path);
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    const audioUrl = `${config.publicUrl}/v1/practice-sessions/${id}/audio`;
+    await prisma.practiceSession.update({ where: { id }, data: { audioUrl } });
+    logger.info('Audio uploaded', { sessionId: id, size: req.file.size });
+    res.json({ audioUrl });
+  } catch (e) {
+    logger.error('POST /practice-sessions/:id/audio error', { error: (e as Error).message });
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /v1/practice-sessions/:id/audio
+router.get('/:id/audio', async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+  try {
+    const session = await prisma.practiceSession.findUnique({ where: { id } });
+    if (!session || session.userId !== req.userId) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    const filePath = path.join(config.audioStoragePath, `${id}.m4a`);
+    if (!fs.existsSync(filePath)) {
+      res.status(404).json({ error: 'Audio file not found' });
+      return;
+    }
+    res.setHeader('Content-Type', 'audio/mp4');
+    res.sendFile(filePath);
+  } catch (e) {
+    logger.error('GET /practice-sessions/:id/audio error', { error: (e as Error).message });
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // POST /v1/practice-sessions/:id/retry-analysis
 router.post('/:id/retry-analysis', async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
@@ -248,8 +312,9 @@ router.post('/:id/retry-analysis', async (req: AuthRequest, res: Response) => {
       return;
     }
     const segCount = await prisma.transcriptSegment.count({ where: { sessionId: id } });
-    if (!session.transcriptFullJson && segCount === 0) {
-      res.status(422).json({ error: 'No transcript available — cannot retry analysis' });
+    const hasAudio = fs.existsSync(path.join(config.audioStoragePath, `${id}.m4a`));
+    if (!session.transcriptFullJson && segCount === 0 && !hasAudio) {
+      res.status(422).json({ error: 'No transcript or audio available — cannot retry analysis' });
       return;
     }
     await prisma.practiceSession.update({
