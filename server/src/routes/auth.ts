@@ -56,7 +56,13 @@ router.post('/anonymous', async (req: Request, res: Response) => {
     const token = signToken({ userId: user!.id });
     res.json({ token, userId: user!.id, deviceId: device.deviceId, expiresIn: config.jwtExpiresIn });
   } catch (e) {
-    logger.error('Auth /anonymous error', { error: (e as Error).message });
+    const err = e as Record<string, unknown>;
+    logger.error('Auth /anonymous error', {
+      message: (e as Error).message,
+      code: err['code'],
+      meta: err['meta'],
+      stack: (e as Error).stack,
+    });
     res.status(500).json({ error: 'Internal server error' });
   }
 });
